@@ -229,4 +229,345 @@
                     <label>Estado</label>
                     <select id="sStatus">
                         <option value="Activo">Activo</option>
-                        <option value="Prueba">Prueba Gratis
+                        <option value="Prueba">Prueba Gratis</option>
+                        <option value="Pausado">Pausado</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Ciclo de Pago</label>
+                    <select id="sCycle">
+                        <option value="Mensual">Mensual</option>
+                        <option value="Anual">Anual</option>
+                        <option value="Lifetime">Lifetime (1 pago)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group row">
+                <div>
+                    <label>Costo</label>
+                    <input type="number" id="sCost" placeholder="0.00">
+                </div>
+                <div>
+                    <label>Moneda</label>
+                    <select id="sCurrency">
+                        <option value="MXN">MXN</option>
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Próxima Renovación / Fin de Prueba</label>
+                <input type="date" id="sRenewal">
+            </div>
+
+            <!-- Sección 3: Seguridad -->
+            <hr style="border-color:#333; margin: 20px 0;">
+            <p style="font-size:0.8rem; color:var(--accent-purple); margin-bottom:10px;">🔐 Accesos (Encriptado)</p>
+            
+            <div class="form-group">
+                <label>Email de Usuario</label>
+                <input type="email" id="sUser" placeholder="admin@empresa.com">
+            </div>
+
+            <div class="form-group">
+                <label>Contraseña</label>
+                <div class="pass-wrapper">
+                    <input type="password" id="sPass" placeholder="Se guardará encriptada">
+                    <button type="button" class="pass-btn" onclick="togglePassVisibility()">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </div>
+            </div>
+
+            <button class="btn-save" onclick="saveSubscription()">Guardar Suscripción</button>
+            
+            <div id="editActions" style="display:none;">
+                <button class="btn-link" onclick="goToLink()">Ir al sitio web <i class="fas fa-external-link-alt"></i></button>
+                <button class="btn-save btn-danger" onclick="deleteSubscription()">Eliminar</button>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // CONFIGURACIÓN FIREBASE (TUS DATOS REALES)
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyCUW8mkor6lzFomj2ethMM9sHuMyRuvY_Q",
+            authDomain: "appfinanzas-cc8aa.firebaseapp.com",
+            projectId: "appfinanzas-cc8aa",
+            storageBucket: "appfinanzas-cc8aa.firebasestorage.app",
+            messagingSenderId: "621532467032",
+            appId: "1:621532467032:web:e7b1ab3f70b970b9839f2d"
+        };
+        // ==========================================
+
+        let db;
+        try {
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+            console.log("Firebase inicializado correctamente.");
+        } catch (e) { 
+            console.error("Error al inicializar Firebase:", e);
+            alert("Error de conexión. Revisa la consola.");
+        }
+
+        let subscriptions = [];
+        const SECRET_KEY = "MiLlaveSecretaAppSaaS"; 
+
+        // --- MANEJO DE NOTIFICACIONES ---
+        function checkNotifications() {
+            if ("Notification" in window && Notification.permission !== "granted") {
+                Notification.requestPermission();
+            }
+            
+            const today = new Date();
+            subscriptions.forEach(sub => {
+                if(sub.status !== 'Activo' && sub.status !== 'Prueba') return;
+                
+                const renewal = new Date(sub.renewal + 'T00:00:00');
+                const diffTime = renewal - today;
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                if (diffDays <= 3 && diffDays >= 0) {
+                    let msg = diffDays === 0 ? `HOY vence ${sub.name}` : `${sub.name} vence en ${diffDays} días`;
+                    if(sub.status === 'Prueba') msg = `🚨 Fin de prueba: ${msg}`;
+                    
+                    new Notification("Alerta de Suscripción", { body: msg, icon: getFavicon(sub.link) });
+                }
+            });
+        }
+
+        // --- ESCUCHA DE DATOS (REALTIME) ---
+        if (db) {
+            // Nota: Aquí nos conectamos a la colección "suscripciones"
+            db.collection("suscripciones").onSnapshot((querySnapshot) => {
+                subscriptions = [];
+                querySnapshot.forEach((doc) => {
+                    subscriptions.push({ id: doc.id, ...doc.data() });
+                });
+                renderList();
+                calculateTotals();
+                checkNotifications();
+                
+                // ENCENDER INDICADOR VERDE SI HAY CONEXIÓN EXITOSA
+                document.getElementById('syncStatus').style.background = '#00d26a';
+                document.getElementById('syncStatus').style.boxShadow = '0 0 10px #00d26a';
+            }, (error) => {
+                console.error("Error al sincronizar:", error);
+                document.getElementById('syncStatus').style.background = '#f73859'; // Rojo si falla
+                alert("No se pudo sincronizar. Verifica las reglas de Firebase.");
+            });
+        }
+
+        // --- FUNCIONES DE SEGURIDAD (ENCRIPTACIÓN) ---
+        function encryptData(text) {
+            if(!text) return "";
+            return CryptoJS.AES.encrypt(text, SECRET_KEY).toString();
+        }
+
+        function decryptData(ciphertext) {
+            if(!ciphertext) return "";
+            try {
+                const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
+                return bytes.toString(CryptoJS.enc.Utf8);
+            } catch (e) { return "Error"; }
+        }
+
+        // --- RENDERIZADO ---
+        function getFavicon(url) {
+            if(!url) return 'https://cdn-icons-png.flaticon.com/512/3616/3616927.png';
+            let domain = url.replace('https://', '').replace('http://', '').split('/')[0];
+            return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+        }
+
+        function renderList() {
+            const list = document.getElementById('subsList');
+            list.innerHTML = '';
+
+            if (subscriptions.length === 0) {
+                list.innerHTML = '<div style="text-align: center; color: #666; margin-top: 20px;">No hay suscripciones. Pulsa + para agregar.</div>';
+                return;
+            }
+
+            let sorted = [...subscriptions].sort((a,b) => new Date(a.renewal) - new Date(b.renewal));
+
+            sorted.forEach(sub => {
+                const today = new Date();
+                const renewal = new Date(sub.renewal + 'T00:00:00');
+                const diffTime = renewal - today;
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                let statusClass = 'st-active';
+                let dateText = `Renueva en ${diffDays} días`;
+
+                if(sub.status === 'Prueba') {
+                    statusClass = 'st-trial';
+                    dateText = `Prueba acaba en ${diffDays} días`;
+                } else if(sub.status === 'Pausado') {
+                    statusClass = 'st-paused';
+                    dateText = 'Pausada';
+                }
+
+                if(diffDays < 0) dateText = "Venció hace " + Math.abs(diffDays) + " días";
+
+                const html = `
+                    <div class="sub-card" onclick="editSub('${sub.id}')">
+                        <img src="${getFavicon(sub.link)}" class="sub-icon" onerror="this.src='https://cdn-icons-png.flaticon.com/512/3616/3616927.png'">
+                        <div class="sub-info">
+                            <div class="sub-name">${sub.name} <span class="cat-tag">${sub.category}</span></div>
+                            <div class="sub-details">
+                                <span class="status-dot ${statusClass}"></span> ${dateText}
+                            </div>
+                        </div>
+                        <div style="text-align:right">
+                            <div class="sub-cost">$${sub.cost} ${sub.currency}</div>
+                            <span class="sub-cycle">${sub.cycle}</span>
+                        </div>
+                    </div>
+                `;
+                list.innerHTML += html;
+            });
+        }
+
+        function calculateTotals() {
+            let monthlyTotal = 0;
+            let yearlyTotal = 0;
+
+            subscriptions.forEach(sub => {
+                if(sub.status === 'Pausado') return;
+
+                let cost = parseFloat(sub.cost);
+                if(isNaN(cost)) return;
+                
+                if(sub.cycle === 'Mensual') {
+                    monthlyTotal += cost;
+                    yearlyTotal += (cost * 12);
+                } else if (sub.cycle === 'Anual') {
+                    monthlyTotal += (cost / 12);
+                    yearlyTotal += cost;
+                }
+            });
+
+            document.getElementById('totalMonthly').innerText = `$${monthlyTotal.toFixed(2)}`;
+            document.getElementById('totalYearly').innerText = `$${yearlyTotal.toFixed(2)}`;
+        }
+
+        // --- LÓGICA DEL FORMULARIO ---
+        function openModal(isEdit = false) {
+            const modal = document.getElementById('modal');
+            modal.style.display = 'flex';
+            if(!isEdit) {
+                document.getElementById('subId').value = '';
+                document.getElementById('modalTitle').innerText = "Nueva Suscripción";
+                ['sName', 'sCat', 'sLink', 'sCost', 'sRenewal', 'sUser', 'sPass'].forEach(id => document.getElementById(id).value = '');
+                document.getElementById('sCycle').value = 'Mensual';
+                document.getElementById('sCurrency').value = 'MXN';
+                document.getElementById('editActions').style.display = 'none';
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('modal').style.display = 'none';
+        }
+
+        function saveSubscription() {
+            const id = document.getElementById('subId').value;
+            const data = {
+                name: document.getElementById('sName').value,
+                category: document.getElementById('sCat').value,
+                link: document.getElementById('sLink').value,
+                status: document.getElementById('sStatus').value,
+                cycle: document.getElementById('sCycle').value,
+                cost: document.getElementById('sCost').value,
+                currency: document.getElementById('sCurrency').value,
+                renewal: document.getElementById('sRenewal').value,
+                user: document.getElementById('sUser').value,
+            };
+            
+            const rawPass = document.getElementById('sPass').value;
+            if(rawPass) {
+                data.pass = encryptData(rawPass); 
+            }
+
+            if(!data.name || !data.cost || !data.renewal) return alert("Completa los campos básicos");
+
+            if(id) {
+                if(!rawPass) delete data.pass; 
+                db.collection("suscripciones").doc(id).update(data);
+            } else {
+                db.collection("suscripciones").add(data);
+            }
+            closeModal();
+        }
+
+        function editSub(id) {
+            const sub = subscriptions.find(s => s.id === id);
+            if(!sub) return;
+
+            document.getElementById('subId').value = sub.id;
+            document.getElementById('modalTitle').innerText = "Editar " + sub.name;
+            
+            document.getElementById('sName').value = sub.name;
+            document.getElementById('sCat').value = sub.category;
+            document.getElementById('sLink').value = sub.link;
+            document.getElementById('sStatus').value = sub.status;
+            document.getElementById('sCycle').value = sub.cycle;
+            document.getElementById('sCost').value = sub.cost;
+            document.getElementById('sCurrency').value = sub.currency;
+            document.getElementById('sRenewal').value = sub.renewal;
+            document.getElementById('sUser').value = sub.user || '';
+            document.getElementById('sPass').value = ''; 
+            document.getElementById('sPass').placeholder = "********** (Oculta)";
+            document.getElementById('sPass').dataset.enc = sub.pass || '';
+
+            document.getElementById('editActions').style.display = 'block';
+            openModal(true);
+        }
+
+        function deleteSubscription() {
+            const id = document.getElementById('subId').value;
+            if(confirm("¿Eliminar esta suscripción?")) {
+                db.collection("suscripciones").doc(id).delete();
+                closeModal();
+            }
+        }
+
+        function goToLink() {
+            let url = document.getElementById('sLink').value;
+            if(url) {
+                if(!url.startsWith('http')) url = 'https://' + url;
+                window.open(url, '_blank');
+            }
+        }
+
+        function togglePassVisibility() {
+            const passInput = document.getElementById('sPass');
+            const encrypted = passInput.dataset.enc;
+            
+            if(passInput.type === "password") {
+                if(!encrypted && !passInput.value) return alert("No hay contraseña guardada");
+                
+                const userPin = prompt("🔐 SEGURIDAD: Ingresa tu PIN de acceso para desencriptar:");
+                
+                if(userPin) {
+                    if(passInput.value) {
+                         passInput.type = "text";
+                    } else {
+                        const decrypted = decryptData(encrypted);
+                        passInput.value = decrypted;
+                        passInput.type = "text";
+                    }
+                }
+            } else {
+                passInput.type = "password";
+                if(!passInput.dataset.new) passInput.value = ""; 
+            }
+        }
+    </script>
+</body>
+</html>
